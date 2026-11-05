@@ -5,7 +5,7 @@
  * tên, icon, màu, nhóm, mô tả, system prompt và các câu gợi ý.
  *
  *   id        : mã duy nhất, chỉ dùng chữ thường, số và dấu gạch ngang
- *   name      : tên hiển thị
+ *   name      : tên hiển thị (name_en: tên tiếng Anh, tuỳ chọn)
  *   icon      : 1 emoji
  *   color     : màu nhận diện (mã hex)
  *   group     : tên nhóm trong thanh bên trái
@@ -13,6 +13,8 @@
  *   description : 1 câu mô tả agent làm gì
  *   system    : "bộ não" của agent, hướng dẫn Claude cách làm việc
  *   starters  : các câu mẫu, bấm vào sẽ điền sẵn vào ô nhập
+ *   *_en      : bản tiếng Anh của name / group / description / starters (tuỳ chọn,
+ *               thiếu thì giao diện EN dùng bản tiếng Việt)
  *
  * Bạn cũng có thể tạo / sửa agent ngay trên website (nút "Tạo agent"),
  * phần đó được lưu trong trình duyệt và xuất ra file JSON được.
@@ -21,10 +23,13 @@ window.DEFAULT_AGENTS = [
   {
     id: "video-prompt",
     name: "Prompt Video",
+    name_en: "Video Prompt",
     icon: "🎬",
     color: "#E2553F",
     group: "Sáng tạo nội dung",
+    group_en: "Content creation",
     description: "Biến ý tưởng thành prompt video theo từng cảnh cho Veo / Flow, Sora, Kling, Runway.",
+    description_en: "Turns an idea into scene-by-scene video prompts for Veo / Flow, Sora, Kling, Runway.",
     system: `Bạn là chuyên gia viết prompt cho các mô hình tạo video AI (Google Veo / Flow, Sora, Kling, Runway, Hailuo).
 Nhiệm vụ: biến ý tưởng của người dùng thành bộ prompt video chất lượng cao, dùng được ngay.
 
@@ -45,15 +50,23 @@ Ngắn gọn, không giải thích lý thuyết.`,
       "Video 20 giây review chè bưởi ở quầy hàng vỉa hè Sài Gòn, có thoại tiếng Việt giọng nữ miền Nam",
       "Cảnh quay sản phẩm son môi xoay 360 độ, ánh sáng studio, 8 giây, 9:16",
       "Viết lại prompt video này cho chi tiết và điện ảnh hơn: "
+    ],
+    starters_en: [
+      "20-second video reviewing pomelo sweet soup at a Saigon street stall, with Vietnamese voice-over by a southern female voice",
+      "Product shot of a lipstick rotating 360°, studio lighting, 8 seconds, 9:16",
+      "Rewrite this video prompt to be more detailed and cinematic: "
     ]
   },
   {
     id: "image-prompt",
     name: "Prompt Ảnh",
+    name_en: "Image Prompt",
     icon: "🖼️",
     color: "#7C5CE0",
     group: "Sáng tạo nội dung",
+    group_en: "Content creation",
     description: "Viết prompt ảnh cho Midjourney, Flux, GPT Image, Imagen. Gửi kèm ảnh mẫu để bắt chước phong cách.",
+    description_en: "Writes image prompts for Midjourney, Flux, GPT Image, Imagen. Attach a reference image to match its style.",
     system: `Bạn là chuyên gia viết prompt tạo ảnh cho Midjourney, Flux, GPT Image, Imagen / Nano Banana và Stable Diffusion.
 
 Cấu trúc một prompt tốt: subject → chi tiết chủ thể → môi trường → bố cục & góc máy (shot, lens, angle) → ánh sáng → bảng màu → phong cách / chất liệu → chất lượng.
@@ -70,15 +83,23 @@ Giải thích bằng tiếng Việt, thật ngắn.`,
       "Ảnh sản phẩm hũ mứt gừng trên bàn gỗ, nắng sớm, phong cách quảng cáo cao cấp",
       "Poster hoạt hình về chú mèo phi hành gia, tỉ lệ 2:3",
       "Phân tích ảnh mình đính kèm và viết prompt tạo ảnh cùng phong cách"
+    ],
+    starters_en: [
+      "Product photo of a ginger jam jar on a wooden table, early sunlight, premium ad style",
+      "Cartoon poster of a cat astronaut, 2:3 ratio",
+      "Analyze the attached image and write a prompt for the same style"
     ]
   },
   {
     id: "short-script",
     name: "Kịch bản video ngắn",
+    name_en: "Short Video Script",
     icon: "📱",
     color: "#D9468F",
     group: "Sáng tạo nội dung",
+    group_en: "Content creation",
     description: "Kịch bản TikTok / Reels / Shorts có hook, thoại, chữ trên màn hình, caption và hashtag.",
+    description_en: "TikTok / Reels / Shorts scripts with hook, voice-over, on-screen text, caption and hashtags.",
     system: `Bạn là biên kịch video ngắn (TikTok, Reels, Shorts) chuyên nội dung bán hàng và review.
 
 Nguyên tắc:
@@ -96,15 +117,23 @@ Nguyên tắc:
       "Kịch bản 30 giây bán hạt đác rim, đối tượng dân văn phòng",
       "Video review quán bún bò, giọng hài hước, 45 giây",
       "Viết 5 hook cho video bán ô mai Tết"
+    ],
+    starters_en: [
+      "30-second script selling candied sugar palm seeds to office workers",
+      "Funny 45-second review of a bun bo restaurant",
+      "Write 5 hooks for a video selling Tet dried apricots"
     ]
   },
   {
     id: "qc-testcase",
     name: "QC Test Case",
+    name_en: "QC Test Cases",
     icon: "🧪",
     color: "#0F9A8F",
     group: "Kiểm thử phần mềm",
+    group_en: "Software testing",
     description: "Thiết kế test case từ user story / spec bằng EP, BVA, Decision Table. Review AC, checklist regression.",
+    description_en: "Designs test cases from user stories / specs with EP, BVA, decision tables. Reviews ACs and builds regression checklists.",
     system: `Bạn là kỹ sư QC phần mềm senior (chuẩn ISTQB), cẩn thận và có óc phản biện.
 
 Từ user story, spec, mô tả màn hình hoặc ảnh chụp giao diện, hãy thiết kế test case bằng các kỹ thuật: Equivalence Partitioning, Boundary Value Analysis, Decision Table, State Transition, Error Guessing.
@@ -126,15 +155,23 @@ Trả lời tiếng Việt, giữ thuật ngữ kỹ thuật bằng tiếng Anh.
       "Viết test case cho màn hình đăng nhập: email + mật khẩu, khoá tài khoản sau 5 lần sai",
       "Review các acceptance criteria sau và chỉ ra chỗ chưa testable:\n",
       "Tạo checklist regression cho chức năng thanh toán đơn hàng"
+    ],
+    starters_en: [
+      "Write test cases for a login screen: email + password, lock the account after 5 failed attempts",
+      "Review these acceptance criteria and point out what isn’t testable:\n",
+      "Create a regression checklist for order checkout"
     ]
   },
   {
     id: "qc-bug",
     name: "Viết Bug Report",
+    name_en: "Bug Report Writer",
     icon: "🐞",
     color: "#C9861A",
     group: "Kiểm thử phần mềm",
+    group_en: "Software testing",
     description: "Biến mô tả lỗi lộn xộn hoặc ảnh chụp màn hình thành bug report chuẩn để dán vào Jira.",
+    description_en: "Turns a messy bug description or screenshot into a clean bug report ready for Jira.",
     system: `Bạn là QC lead chuyên viết bug report rõ ràng để dev tái hiện được ngay.
 
 Chuyển mô tả lỗi (có thể lộn xộn, kèm ảnh chụp màn hình) thành bug report theo mẫu:
@@ -156,15 +193,36 @@ Quy tắc:
       "Bấm Lưu đơn hàng thì loading mãi, refresh lại thấy đơn bị lưu 2 lần",
       "Viết bug report bằng tiếng Anh cho lỗi sau:\n",
       "Đánh giá severity và priority cho lỗi này:\n"
+    ],
+    starters_en: [
+      "Clicking Save on an order spins forever; after refresh the order is saved twice",
+      "Write a bug report in English for this issue:\n",
+      "Assess severity and priority for this bug:\n"
     ]
+  },
+  {
+    id: "video-downloader",
+    type: "tool",               // agent dạng công cụ, không chat với Claude
+    tool: "video-downloader",
+    name: "Tải video FB / TikTok",
+    name_en: "FB / TikTok Downloader",
+    icon: "⬇️",
+    color: "#1E8E5A",
+    group: "Tiện ích",
+    group_en: "Utilities",
+    description: "Dán link Facebook hoặc TikTok để tải video không logo, tải nhạc MP3, tải ảnh slideshow.",
+    description_en: "Paste a Facebook or TikTok link to download the video without watermark, the MP3 audio, or slideshow images."
   },
   {
     id: "translate",
     name: "Dịch & Viết lại",
+    name_en: "Translate & Rewrite",
     icon: "🌐",
     color: "#2F6FDB",
     group: "Tiện ích",
+    group_en: "Utilities",
     description: "Dịch Việt ↔ Anh tự nhiên, chỉnh email và tin nhắn công việc, giữ đúng thuật ngữ IT.",
+    description_en: "Natural Vietnamese ↔ English translation, polishes work emails and messages, keeps IT terms right.",
     system: `Bạn là biên dịch viên và biên tập viên song ngữ Việt – Anh, am hiểu ngữ cảnh công việc IT.
 
 - Văn bản tiếng Việt → dịch sang tiếng Anh; văn bản tiếng Anh → dịch sang tiếng Việt, trừ khi người dùng chỉ định khác.
@@ -176,23 +234,44 @@ Quy tắc:
       "Dịch sang tiếng Anh, giọng lịch sự gửi khách hàng:\n",
       "Viết lại email này cho chuyên nghiệp và ngắn gọn hơn:\n",
       "Dịch đoạn tài liệu kỹ thuật sau sang tiếng Việt:\n"
+    ],
+    starters_en: [
+      "Translate to English, polite tone for a client:\n",
+      "Rewrite this email to be more professional and concise:\n",
+      "Translate this technical doc into Vietnamese:\n"
     ]
   },
   {
     id: "general",
     name: "Trợ lý chung",
+    name_en: "General Assistant",
     icon: "💬",
     color: "#5B6785",
     group: "Tiện ích",
+    group_en: "Utilities",
     description: "Hỏi đáp, lên ý tưởng, tóm tắt, giải thích mọi thứ.",
+    description_en: "Q&A, brainstorming, summaries, explanations.",
     system: `Bạn là trợ lý cá nhân thông minh, trả lời bằng tiếng Việt, thẳng vào vấn đề, có ví dụ cụ thể khi cần. Dùng định dạng (bảng, danh sách) chỉ khi giúp dễ đọc hơn.`,
     starters: [
       "Tóm tắt đoạn văn sau thành 5 ý chính:\n",
       "Giải thích cho mình như người mới bắt đầu: ",
       "Lên kế hoạch công việc tuần này giúp mình: "
+    ],
+    starters_en: [
+      "Summarize this text into 5 key points:\n",
+      "Explain this to me like a beginner: ",
+      "Help me plan my work for this week: "
     ]
   }
 ];
 
 /* Những agent được ghim lên đầu khi mở web lần đầu (dùng hằng ngày) */
-window.DEFAULT_PINNED = ["video-prompt", "image-prompt", "qc-testcase"];
+window.DEFAULT_PINNED = ["video-prompt", "image-prompt", "qc-testcase", "video-downloader"];
+
+/* CẤU HÌNH CHUNG
+ * downloaderApi: link Cloudflare Worker tải video (xem README, mục "Cài máy chủ tải video").
+ * Ví dụ: "https://phucboo-video.ten-ban.workers.dev"
+ */
+window.APP_CONFIG = {
+  downloaderApi: ""
+};
