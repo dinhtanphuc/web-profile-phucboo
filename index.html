@@ -1,24 +1,26 @@
 <!doctype html>
-<html lang="vi">
+<html lang="vi" data-theme="dark">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Phucboo Agents</title>
   <meta name="description" content="Bộ AI Agent cá nhân chạy bằng Claude">
+  <meta name="theme-color" content="#07080D">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🤖</text></svg>">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=Fraunces:opsz,wght@9..144,500;9..144,600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="assets/style.css">
 </head>
 <body>
+<div class="stage" aria-hidden="true"></div>
 <div class="app" id="app">
 
   <aside class="rail" id="rail">
     <div class="rail-head">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">🤖</span>
-        <span>Phucboo Agents</span>
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span class="brand-name">Phucboo Agents</span>
       </div>
       <div class="lang-switch" role="group" aria-label="Ngôn ngữ / Language">
         <button type="button" data-lang="vi" lang="vi">VI</button>
@@ -37,6 +39,7 @@
     <div class="rail-foot">
       <button class="btn btn-ghost" id="newAgent" data-i18n="newAgent"></button>
       <button class="btn btn-ghost" id="openSettings" data-i18n="settings"></button>
+      <button class="icon-btn theme-btn" id="themeBtn" data-i18n-title="themeToggle" data-i18n-aria="themeToggle">◐</button>
     </div>
   </aside>
   <div class="scrim" id="scrim" hidden></div>
@@ -61,6 +64,7 @@
     <section class="thread" id="thread" aria-live="polite"></section>
 
     <form class="composer" id="composer" autocomplete="off">
+      <div class="conn-row" id="connRow" hidden></div>
       <div class="attach-row" id="attachRow" hidden></div>
       <div class="composer-box">
         <label class="icon-btn attach-btn" data-i18n-title="attachTitle">
@@ -102,10 +106,32 @@
     </label>
 
     <label class="field">
-      <span data-i18n="sDl"></span>
+      <span data-i18n="dlApiLabel"></span>
       <input type="url" id="dlApi" placeholder="https://….workers.dev" spellcheck="false">
       <small data-i18n="sDlHelp"></small>
     </label>
+
+    <fieldset class="conn-box">
+      <legend data-i18n="sConn"></legend>
+      <small class="conn-help" data-i18n="sConnHelp"></small>
+
+      <div class="conn-card">
+        <div class="conn-title"><strong data-i18n="connJira"></strong><span class="conn-state" id="jiraState"></span></div>
+        <div class="grid-2">
+          <label class="field"><span data-i18n="connJiraEmail"></span><input type="email" id="jiraEmail" autocomplete="off" spellcheck="false"></label>
+          <label class="field"><span data-i18n="connJiraToken"></span><input type="password" id="jiraToken" autocomplete="off" spellcheck="false"></label>
+        </div>
+        <label class="field"><span data-i18n="connUrl"></span><input type="url" id="jiraUrl" spellcheck="false" placeholder="…/mcp/atlassian"></label>
+        <small data-i18n="connJiraHelp"></small>
+      </div>
+
+      <div class="conn-card">
+        <div class="conn-title"><strong data-i18n="connHf"></strong><span class="conn-state" id="hfState"></span></div>
+        <label class="field"><span data-i18n="connHfToken"></span><input type="password" id="hfToken" autocomplete="off" spellcheck="false"></label>
+        <label class="field"><span data-i18n="connUrl"></span><input type="url" id="hfUrl" spellcheck="false" placeholder="…/mcp/higgsfield"></label>
+        <small data-i18n="connHfHelp"></small>
+      </div>
+    </fieldset>
 
     <div class="field">
       <span data-i18n="sBackup"></span>
@@ -145,6 +171,10 @@
       <span data-i18n="aStarters"></span>
       <textarea id="fStarters" rows="3"></textarea>
     </label>
+    <div class="field">
+      <span data-i18n="aConn"></span>
+      <div class="inline wrap" id="fConn"></div>
+    </div>
     <div class="dlg-actions">
       <button type="button" class="btn btn-danger" id="deleteAgent"></button>
       <button type="button" class="btn btn-ghost" id="resetAgent" data-i18n="aReset"></button>

@@ -4,7 +4,10 @@
   /* ================= Cấu hình ================= */
   const API_URL = 'https://api.anthropic.com/v1/messages';
   const MODEL_IDS = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'];
-  const DEFAULT_SETTINGS = { apiKey: '', model: MODEL_IDS[0], maxTokens: 4096, lang: '', dlApi: '' };
+  const DEFAULT_SETTINGS = { apiKey: '', model: MODEL_IDS[0], maxTokens: 4096, lang: '', dlApi: '', theme: 'dark' };
+  const MCP_BETA = 'mcp-client-2025-11-20';
+  const CONN_IDS = ['jira', 'higgsfield'];
+  const GROUPS = window.AGENT_GROUPS || [];
   const MAX_IMG_BYTES = 5 * 1024 * 1024;
   const APP_CONFIG = window.APP_CONFIG || {};
 
@@ -17,9 +20,14 @@
   const K = { settings: 'pb.settings', store: 'pb.agents', last: 'pb.last', chat: id => 'pb.chat.' + id };
 
   let settings = { ...DEFAULT_SETTINGS, ...LS.get(K.settings, {}) };
+  settings.conn = {
+    jira: { email: '', token: '', url: '', ...((settings.conn || {}).jira || {}) },
+    higgsfield: { token: '', url: '', ...((settings.conn || {}).higgsfield || {}) }
+  };
   if (!settings.lang) settings.lang = /^vi\b/i.test(navigator.language || 'vi') ? 'vi' : 'en';
 
-  let store = { overrides: {}, custom: [], removed: [], pinned: null, ...LS.get(K.store, {}) };
+  let store = { overrides: {}, custom: [], removed: [], pinned: null, collapsed: [], ...LS.get(K.store, {}) };
+  if (!Array.isArray(store.collapsed)) store.collapsed = [];
   if (!Array.isArray(store.pinned)) store.pinned = [...(window.DEFAULT_PINNED || [])];
   const saveStore = () => LS.set(K.store, store);
 
@@ -41,6 +49,7 @@
   }
   function applyStaticText() {
     document.documentElement.lang = settings.lang;
+    document.documentElement.dataset.theme = settings.theme === 'light' ? 'light' : 'dark';
     document.querySelectorAll('[data-i18n]').forEach(n => { n.textContent = t(n.dataset.i18n); });
     document.querySelectorAll('[data-i18n-html]').forEach(n => { n.innerHTML = t(n.dataset.i18nHtml); });
     document.querySelectorAll('[data-i18n-ph]').forEach(n => { n.placeholder = t(n.dataset.i18nPh); });
@@ -78,13 +87,14 @@
   let current = null;
   let attachments = [];
   let liveEl = null, liveMsg = null, rafPending = false;
+  const connOff = {};          // agentId -> Set kết nối đã tắt trong phiên
 
   function getChat(id) {
     if (!chats[id]) chats[id] = LS.get(K.chat(id), []);
     return chats[id];
   }
   function saveChat(id) {
-    const slim = getChat(id).map(m => ({ role: m.role, text: m.text, error: m.error || undefined, imgCount: (m.images ? m.images.length : m.imgCount) || undefined }));
+    const slim = getChat(id).map(m => ({ role: m.role, text: m.text, error: m.error || undefined, tools: m.tools && m.tools.length ? m.tools : undefined, imgCount: (m.images ? m.images.length : m.imgCount) || undefined }));
     if (!LS.set(K.chat(id), slim)) toast(t('storageFull'));
   }
 
@@ -95,7 +105,8 @@
     desk: $('#desk'), icon: $('#agentIcon'), name: $('#agentName'), desc: $('#agentDesc'), modelChip: $('#modelChip'),
     thread: $('#thread'), form: $('#composer'), input: $('#input'), send: $('#sendBtn'),
     file: $('#fileInput'), attachRow: $('#attachRow'), toast: $('#toast'),
-    sDlg: $('#settingsDlg'), aDlg: $('#agentDlg'), editBtn: $('#editAgent'), clearBtn: $('#clearChat')
+    sDlg: $('#settingsDlg'), aDlg: $('#agentDlg'), editBtn: $('#editAgent'), clearBtn: $('#clearChat'),
+    connRow: $('#connRow')
   };
 
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -126,6 +137,7 @@
       .replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>')
       .replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, '$1<em>$2</em>')
       .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(/(^|[\s(])(https?:\/\/[^\s<)"]+[^\s<)".,;:!?])/g, '$1<a href="$2" target="_blank" rel="noopener">$2</a>')
       .replace(/&lt;br\s*\/?&gt;/gi, '<br>');
     return s.replace(/\u0000(\d+)\u0000/g, (_, i) => '<code>' + esc(codes[+i]) + '</code>');
   }
@@ -188,47 +200,102 @@
       const nl = part.indexOf('\n');
       const lang = (nl === -1 ? part : part.slice(0, nl)).trim();
       const code = nl === -1 ? '' : part.slice(nl + 1).replace(/\n$/, '');
-      html += `<div class="code"><div class="code-bar"><span>${esc(lang || 'text')}</span><button type="button" data-copy-code>${esc(t('copy'))}</button></div><pre><code>${esc(code)}</code></pre></div>`;
+      const dlBtn = /^(srt|vtt|csv|json|md|txt|ass)$/i.test(lang) ? `<button type="button" data-dl-code="${esc(lang.toLowerCase())}">${esc(t('downloadFile'))} .${esc(lang.toLowerCase())}</button>` : '';
+      html += `<div class="code"><div class="code-bar"><span>${esc(lang || 'text')}</span><span class="code-actions">${dlBtn}<button type="button" data-copy-code>${esc(t('copy'))}</button></span></div><pre><code>${esc(code)}</code></pre></div>`;
     });
-    return html;
+    return withMedia(html);
+  }
+
+  // Link ảnh / video (kết quả Higgsfield...) được hiện trực tiếp bên dưới đoạn văn
+  const IMG_RE = /\.(png|jpe?g|webp|gif|avif)(\?|#|$)/i;
+  const VID_RE = /\.(mp4|webm|mov|m4v)(\?|#|$)/i;
+  function withMedia(html) {
+    if (!/<a href="https?:/.test(html)) return html;
+    const box = document.createElement('div');
+    box.innerHTML = html;
+    const seen = new Set();
+    box.querySelectorAll('a[href]').forEach(a => {
+      const href = a.getAttribute('href');
+      if (seen.has(href) || a.closest('pre, .media')) return;
+      const isImg = IMG_RE.test(href), isVid = VID_RE.test(href);
+      if (!isImg && !isVid) return;
+      seen.add(href);
+      const fig = document.createElement('figure');
+      fig.className = 'media';
+      fig.innerHTML = (isImg
+        ? `<img src="${esc(href)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
+        : `<video src="${esc(href)}" controls playsinline preload="metadata"></video>`) +
+        `<figcaption><a href="${esc(href)}" target="_blank" rel="noopener">${esc(t('openMedia'))} ↗</a></figcaption>`;
+      const block = a.closest('p, li, td, blockquote') || a;
+      const anchor = block.closest('ul, ol, .table-wrap') || block;
+      anchor.after(fig);
+    });
+    return box.innerHTML;
   }
 
   /* ================= Danh sách agent ================= */
+  function groupOf(a) {
+    const g = a.group || '';
+    const def = GROUPS.find(x => x.id === g || x.name === g || x.name_en === g);
+    if (def) return { key: def.id, name: loc(def, 'name'), icon: def.icon || '' };
+    if (g) return { key: 'g:' + g, name: g, icon: '' };
+    return a.builtIn ? { key: 'other', name: t('other'), icon: '' } : { key: 'mine', name: t('myAgents'), icon: '' };
+  }
+
+  function itemHtml(a) {
+    const isPinned = store.pinned.includes(a.id);
+    return `<div class="agent-item" role="button" tabindex="0" data-id="${esc(a.id)}" style="--c:${esc(a.color || '#8FA3FF')}" aria-current="${!!(current && current.id === a.id)}">
+      <span class="tile" aria-hidden="true">${esc(a.icon || '🤖')}</span>
+      <span class="label">${esc(loc(a, 'name'))}</span>
+      ${running[a.id] ? `<span class="busy-dot" title="${esc(t('busy'))}"></span>` : ''}
+      <button class="pin" type="button" data-pin="${esc(a.id)}" aria-pressed="${isPinned}" title="${esc(isPinned ? t('unpin') : t('pin'))}">${isPinned ? '★' : '☆'}</button>
+    </div>`;
+  }
+
   function renderList() {
     const q = el.search.value.trim().toLowerCase();
     const agents = allAgents().filter(a => !q ||
-      [a.name, a.name_en, a.description, a.description_en, a.group, a.group_en].filter(Boolean).join(' ').toLowerCase().includes(q));
-    const groups = new Map();
-    const pinned = agents.filter(a => store.pinned.includes(a.id))
-      .sort((a, b) => store.pinned.indexOf(a.id) - store.pinned.indexOf(b.id));
-    if (pinned.length && !q) groups.set(t('pinned'), pinned);
-    for (const a of agents) {
-      if (!q && store.pinned.includes(a.id)) continue;
-      const g = loc(a, 'group') || (a.builtIn ? t('other') : t('myAgents'));
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(a);
-    }
+      [a.name, a.name_en, a.description, a.description_en, a.group].filter(Boolean).join(' ').toLowerCase().includes(q));
     if (!agents.length) {
       el.list.innerHTML = `<p class="empty-list">${esc(t('noMatch', { q }))}</p>`;
       return;
     }
     let html = '';
-    for (const [g, items] of groups) {
-      html += `<div class="group-title">${esc(g)}</div>`;
-      for (const a of items) {
-        const isPinned = store.pinned.includes(a.id);
-        html += `<div class="agent-item" role="button" tabindex="0" data-id="${esc(a.id)}" style="--c:${esc(a.color || '#3550E8')}" aria-current="${!!(current && current.id === a.id)}">
-          <span class="tile" aria-hidden="true">${esc(a.icon || '🤖')}</span>
-          <span class="label">${esc(loc(a, 'name'))}</span>
-          ${running[a.id] ? `<span class="busy-dot" title="${esc(t('busy'))}"></span>` : ''}
-          <button class="pin" type="button" data-pin="${esc(a.id)}" aria-pressed="${isPinned}" title="${esc(isPinned ? t('unpin') : t('pin'))}">${isPinned ? '★' : '☆'}</button>
-        </div>`;
-      }
+    const pinned = agents.filter(a => store.pinned.includes(a.id))
+      .sort((a, b) => store.pinned.indexOf(a.id) - store.pinned.indexOf(b.id));
+    if (pinned.length && !q) {
+      html += `<section class="group pinned"><div class="group-title">★ ${esc(t('pinned'))}</div>${pinned.map(itemHtml).join('')}</section>`;
+    }
+    const groups = new Map();
+    GROUPS.forEach(g => groups.set(g.id, null));
+    for (const a of agents) {
+      const g = groupOf(a);
+      if (!groups.get(g.key)) groups.set(g.key, { ...g, items: [] });
+      groups.get(g.key).items.push(a);
+    }
+    for (const [key, g] of groups) {
+      if (!g) continue;
+      const open = q || !store.collapsed.includes(key) || (current && g.items.some(a => a.id === current.id) && !store.collapsed.includes(key));
+      html += `<section class="group${open ? ' open' : ''}">
+        <button type="button" class="group-head" data-group="${esc(key)}" aria-expanded="${!!open}" title="${esc(t('groupToggle'))}">
+          ${g.icon ? `<span class="group-icon" aria-hidden="true">${esc(g.icon)}</span>` : ''}
+          <span class="group-name">${esc(g.name)}</span>
+          <span class="group-count">${g.items.length}</span>
+          <span class="chev" aria-hidden="true"></span>
+        </button>
+        <div class="group-body">${g.items.map(itemHtml).join('')}</div>
+      </section>`;
     }
     el.list.innerHTML = html;
   }
 
   el.list.addEventListener('click', e => {
+    const gh = e.target.closest('[data-group]');
+    if (gh) {
+      const k = gh.dataset.group;
+      store.collapsed = store.collapsed.includes(k) ? store.collapsed.filter(x => x !== k) : [...store.collapsed, k];
+      saveStore(); renderList(); return;
+    }
     const pin = e.target.closest('[data-pin]');
     if (pin) {
       e.stopPropagation();
@@ -268,9 +335,54 @@
     el.modelChip.textContent = modelFor(a);
     document.title = loc(a, 'name') + ' · Phucboo Agents';
     renderList();
+    renderConnChips();
     if (tool) renderTool(); else { renderThread(); updateSendBtn(); }
     if (!keepFocus && !tool && matchMedia('(min-width: 861px)').matches) el.input.focus();
   }
+
+  /* ================= Kết nối MCP ================= */
+  const workerBase = () => (settings.dlApi || APP_CONFIG.downloaderApi || '').trim().replace(/\/+$/, '');
+  function connServer(id) {
+    const c = settings.conn[id] || {};
+    const base = workerBase();
+    if (id === 'jira') {
+      if (!c.email || !c.token) return null;
+      const url = (c.url || '').trim() || (base ? base + '/mcp/atlassian' : '');
+      if (!url) return null;
+      let b64;
+      try { b64 = btoa(unescape(encodeURIComponent(c.email.trim() + ':' + c.token.trim()))); } catch { return null; }
+      return { type: 'url', name: 'jira', url, authorization_token: 'basic:' + b64 };
+    }
+    if (id === 'higgsfield') {
+      const url = (c.url || '').trim() || (base ? base + '/mcp/higgsfield' : '');
+      if (!url) return null;
+      const def = { type: 'url', name: 'higgsfield', url };
+      if (c.token) def.authorization_token = c.token.trim();
+      return def;
+    }
+    return null;
+  }
+  const agentConns = a => (a && Array.isArray(a.mcp) ? a.mcp.filter(id => CONN_IDS.includes(id)) : []);
+  function activeServers(a) {
+    const off = connOff[a.id] || new Set();
+    return agentConns(a).filter(id => !off.has(id)).map(connServer).filter(Boolean);
+  }
+  function renderConnChips() {
+    const conns = isTool(current) ? [] : agentConns(current).filter(id => connServer(id));
+    el.connRow.hidden = !conns.length;
+    const off = connOff[current.id] || new Set();
+    el.connRow.innerHTML = conns.map(id => {
+      const on = !off.has(id), name = t('conn_' + id);
+      return `<button type="button" class="conn-chip" data-conn="${id}" aria-pressed="${on}" title="${esc(t(on ? 'chipOn' : 'chipOff', { name }))}"><span class="dot"></span>${esc(name)}</button>`;
+    }).join('');
+  }
+  el.connRow.addEventListener('click', e => {
+    const b = e.target.closest('[data-conn]');
+    if (!b) return;
+    const set = connOff[current.id] || (connOff[current.id] = new Set());
+    set.has(b.dataset.conn) ? set.delete(b.dataset.conn) : set.add(b.dataset.conn);
+    renderConnChips();
+  });
 
   /* ================= Khung chat ================= */
   function renderThread() {
@@ -283,6 +395,7 @@
         <h2>${esc(loc(current, 'name'))}</h2>
         <p>${esc(loc(current, 'description') || t('startHint'))}</p>
         ${starters.length ? `<div class="starters">${starters.map((s, i) => `<button type="button" class="starter" data-starter="${i}">${esc(s.trim())}</button>`).join('')}</div>` : ''}
+        ${missingConnNote()}
         ${settings.apiKey ? '' : `<div class="key-warning"><strong>${esc(t('noKeyTitle'))}</strong> ${esc(t('noKeyBody'))}<br><button type="button" class="btn btn-sm" data-open-settings>${esc(t('enterKey'))}</button></div>`}
       </div>`;
       return;
@@ -295,6 +408,18 @@
     el.thread.scrollTop = el.thread.scrollHeight;
   }
 
+  function missingConnNote() {
+    const missing = agentConns(current).filter(id => !connServer(id)).map(id => t('conn_' + id));
+    if (!missing.length) return '';
+    const names = missing.join(', ');
+    return `<div class="key-warning soft">${esc(t('needConn', { names }))}<br><button type="button" class="btn btn-sm" data-open-settings="conn">${esc(t('openConn'))}</button></div>`;
+  }
+
+  function toolsHtml(tools) {
+    if (!tools || !tools.length) return '';
+    return `<div class="tool-chips">${tools.map(tl => `<span class="tool-chip${tl.error ? ' err' : tl.done ? ' done' : ''}"><span class="dot"></span>${esc(t('conn_' + tl.server) || tl.server)} · ${esc(tl.name)}${tl.error ? ' · ' + esc(t('toolErr')) : ''}</span>`).join('')}</div>`;
+  }
+
   function msgHtml(m, i, msgs) {
     if (m.role === 'user') {
       const imgs = m.images && m.images.length
@@ -304,7 +429,7 @@
     }
     const isLast = i === msgs.length - 1;
     const streaming = isLast && running[current.id];
-    const body = m.error ? `<p>${esc(m.text)}</p>` : (m.text ? md(m.text) : `<p class="thinking">${esc(t('thinking'))}</p>`);
+    const body = toolsHtml(m.tools) + (m.error ? `<p>${esc(m.text)}</p>` : (m.text ? md(m.text) : `<p class="thinking">${esc(t('thinking'))}</p>`));
     const actions = streaming ? '' : `<div class="msg-actions">
         ${m.error ? '' : `<button type="button" data-copy-msg="${i}">${esc(t('copy'))}</button>`}
         ${isLast ? `<button type="button" data-retry>${esc(t('retry'))}</button>` : ''}
@@ -315,9 +440,20 @@
   el.thread.addEventListener('click', e => {
     const tg = e.target;
     if (tg.matches('[data-copy-code]')) { copyText(tg.closest('.code').querySelector('pre').textContent); return; }
+    if (tg.matches('[data-dl-code]')) {
+      const ext = tg.dataset.dlCode;
+      const text = tg.closest('.code').querySelector('pre').textContent;
+      const mime = { json: 'application/json', csv: 'text/csv' }[ext] || 'text/plain';
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([ext === 'csv' ? '\ufeff' + text : text], { type: mime + ';charset=utf-8' }));
+      a.download = `${current.id}_${new Date().toISOString().slice(0, 10)}.${ext}`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+      return;
+    }
     if (tg.matches('[data-copy-msg]')) { copyText(getChat(current.id)[+tg.dataset.copyMsg].text); return; }
     if (tg.matches('[data-retry]')) { retry(); return; }
-    if (tg.matches('[data-open-settings]')) { openSettings(); return; }
+    if (tg.matches('[data-open-settings]')) { openSettings(null, tg.dataset.openSettings === 'conn'); return; }
     const st = tg.closest('[data-starter]');
     if (st) {
       el.input.value = loc(current, 'starters')[+st.dataset.starter];
@@ -334,7 +470,7 @@
       rafPending = false;
       if (!liveEl || !liveMsg || !current) return;
       const stick = nearBottom();
-      liveEl.innerHTML = liveMsg.text ? md(liveMsg.text) : `<p class="thinking">${esc(t('thinking'))}</p>`;
+      liveEl.innerHTML = toolsHtml(liveMsg.tools) + (liveMsg.text ? md(liveMsg.text) : `<p class="thinking">${esc(t('thinking'))}</p>`);
       if (stick) el.thread.scrollTop = el.thread.scrollHeight;
     });
   }
@@ -390,23 +526,31 @@
     renderList(); updateSendBtn();
 
     const system = ((agent.system || '') + t('langSuffix')).trim();
+    const servers = activeServers(agent);
+    const headers = {
+      'content-type': 'application/json',
+      'x-api-key': settings.apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    };
+    const payload = {
+      model: modelFor(agent),
+      max_tokens: Number(settings.maxTokens) || DEFAULT_SETTINGS.maxTokens,
+      system: system || undefined,
+      messages: apiMessages,
+      stream: true
+    };
+    if (servers.length) {
+      headers['anthropic-beta'] = MCP_BETA;
+      payload.mcp_servers = servers;
+      payload.tools = servers.map(sv => ({ type: 'mcp_toolset', mcp_server_name: sv.name }));
+    }
     try {
       const res = await fetch(API_URL, {
         method: 'POST',
         signal: ctrl.signal,
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': settings.apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model: modelFor(agent),
-          max_tokens: Number(settings.maxTokens) || DEFAULT_SETTINGS.maxTokens,
-          system: system || undefined,
-          messages: apiMessages,
-          stream: true
-        })
+        headers,
+        body: JSON.stringify(payload)
       });
       if (!res.ok) {
         const err = await res.json().catch(() => null);
@@ -425,7 +569,18 @@
           const data = chunk.split('\n').filter(l => l.startsWith('data:')).map(l => l.slice(5).trim()).join('');
           if (!data) continue;
           let ev; try { ev = JSON.parse(data); } catch { continue; }
-          if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') {
+          if (ev.type === 'content_block_start' && ev.content_block) {
+            const cb = ev.content_block;
+            if (cb.type === 'mcp_tool_use') {
+              (reply.tools || (reply.tools = [])).push({ id: cb.id, name: cb.name, server: cb.server_name, done: false });
+            } else if (cb.type === 'mcp_tool_result') {
+              const tl = (reply.tools || []).find(x => x.id === cb.tool_use_id);
+              if (tl) { tl.done = true; tl.error = !!cb.is_error; }
+            } else if (cb.type === 'text' && reply.text && !/\n\n$/.test(reply.text)) {
+              reply.text += '\n\n';
+            }
+            if (current.id === id) scheduleLive();
+          } else if (ev.type === 'content_block_delta' && ev.delta && ev.delta.type === 'text_delta') {
             reply.text += ev.delta.text;
             if (current.id === id) scheduleLive();
           } else if (ev.type === 'message_delta' && ev.delta) {
@@ -543,7 +698,7 @@
 
   /* ================= Agent công cụ: tải video ================= */
   const dl = { input: '', results: [], busy: false };
-  const dlApi = () => (settings.dlApi || APP_CONFIG.downloaderApi || '').trim().replace(/\/+$/, '');
+  const dlApi = () => workerBase();
 
   function detectPlatform(u) {
     let h;
@@ -703,7 +858,17 @@
   }
 
   /* ================= Cài đặt ================= */
-  function openSettings(note) {
+  function connStates() {
+    const base = workerBase() || $('#dlApi').value.trim();
+    const st = (ok) => `<span class="${ok ? 'ok' : ''}">${esc(t(ok ? 'connReady' : 'connMissing'))}</span>`;
+    const jiraOk = $('#jiraEmail').value.trim() && $('#jiraToken').value.trim() && ($('#jiraUrl').value.trim() || base);
+    const hfOk = $('#hfUrl').value.trim() || base;
+    $('#jiraState').innerHTML = st(!!jiraOk);
+    $('#hfState').innerHTML = st(!!hfOk);
+  }
+  ['#jiraEmail', '#jiraToken', '#jiraUrl', '#hfToken', '#hfUrl', '#dlApi'].forEach(sel => $(sel).addEventListener('input', connStates));
+
+  function openSettings(note, focusConn) {
     $('#settingsNote').hidden = !note;
     $('#settingsNote').textContent = note || '';
     $('#apiKey').value = settings.apiKey;
@@ -712,7 +877,14 @@
     $('#maxTokens').value = settings.maxTokens;
     $('#dlApi').value = settings.dlApi || '';
     $('#dlApi').placeholder = APP_CONFIG.downloaderApi || 'https://….workers.dev';
+    $('#jiraEmail').value = settings.conn.jira.email || '';
+    $('#jiraToken').value = settings.conn.jira.token || '';
+    $('#jiraUrl').value = settings.conn.jira.url || '';
+    $('#hfToken').value = settings.conn.higgsfield.token || '';
+    $('#hfUrl').value = settings.conn.higgsfield.url || '';
+    connStates();
     el.sDlg.showModal();
+    if (focusConn) { $('.conn-box').scrollIntoView({ block: 'start' }); $('#jiraEmail').focus(); return; }
     if (!settings.apiKey && !isTool(current)) $('#apiKey').focus();
   }
   $('#openSettings').addEventListener('click', () => { closeRail(); openSettings(); });
@@ -726,6 +898,10 @@
     settings.model = $('#model').value.trim() || DEFAULT_SETTINGS.model;
     settings.maxTokens = Math.max(256, Math.min(64000, parseInt($('#maxTokens').value, 10) || DEFAULT_SETTINGS.maxTokens));
     settings.dlApi = $('#dlApi').value.trim();
+    settings.conn = {
+      jira: { email: $('#jiraEmail').value.trim(), token: $('#jiraToken').value.trim(), url: $('#jiraUrl').value.trim() },
+      higgsfield: { token: $('#hfToken').value.trim(), url: $('#hfUrl').value.trim() }
+    };
     LS.set(K.settings, settings);
     toast(t('saved'));
     selectAgent(current.id);
@@ -767,15 +943,17 @@
     editingId = agent ? agent.id : null;
     $('#agentDlgTitle').textContent = agent ? t('aEdit') : t('aCreate');
     $('#fName').value = agent ? loc(agent, 'name') : '';
-    $('#fGroup').value = agent ? (loc(agent, 'group') || '') : t('myAgents');
+    $('#fGroup').value = agent ? (groupOf(agent).name || '') : t('myAgents');
     $('#fIcon').value = agent ? (agent.icon || '') : '🤖';
     $('#fColor').value = agent && /^#[0-9a-f]{6}$/i.test(agent.color || '') ? agent.color : '#3550E8';
     $('#fDesc').value = agent ? (loc(agent, 'description') || '') : '';
     $('#fModel').value = agent ? (agent.model || '') : '';
     $('#fSystem').value = agent ? (agent.system || '') : '';
     $('#fStarters').value = agent ? (loc(agent, 'starters') || []).map(s => s.replace(/\n/g, ' ').trim()).join('\n') : '';
-    const groups = [...new Set(allAgents().map(a => loc(a, 'group')).filter(Boolean))];
+    const groups = [...new Set(GROUPS.map(g => loc(g, 'name')).concat(store.custom.map(a => a.group)).filter(Boolean))];
     $('#groupList').innerHTML = groups.map(g => `<option value="${esc(g)}">`).join('');
+    const sel = agent ? agentConns(agent) : [];
+    $('#fConn').innerHTML = CONN_IDS.map(id => `<label class="check"><input type="checkbox" value="${id}" ${sel.includes(id) ? 'checked' : ''}> ${esc(t('conn_' + id))}</label>`).join('');
     $('#deleteAgent').hidden = !agent;
     $('#deleteAgent').textContent = agent && agent.builtIn ? t('aHide') : t('aDelete');
     $('#resetAgent').hidden = !(agent && agent.builtIn && agent.edited);
@@ -795,7 +973,8 @@
       description: $('#fDesc').value.trim(),
       model: $('#fModel').value.trim(),
       system: $('#fSystem').value,
-      starters: $('#fStarters').value.split('\n').map(s => s.trim()).filter(Boolean)
+      starters: $('#fStarters').value.split('\n').map(s => s.trim()).filter(Boolean),
+      mcp: [...document.querySelectorAll('#fConn input:checked')].map(i => i.value)
     };
     let id = editingId;
     if (!id) {
@@ -828,6 +1007,12 @@
     saveStore(); el.aDlg.close();
     toast(t('aResetDone'));
     selectAgent(editingId);
+  });
+
+  $('#themeBtn').addEventListener('click', () => {
+    settings.theme = settings.theme === 'light' ? 'dark' : 'light';
+    LS.set(K.settings, settings);
+    applyStaticText();
   });
 
   /* ================= Thanh bên trên điện thoại ================= */

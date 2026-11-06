@@ -3,10 +3,14 @@
  * ------------------------------------------------------------------
  *   GET /resolve?url=<link TikTok hoặc Facebook>   -> JSON thông tin video + các link tải
  *   GET /download?src=<link media>&name=<tên file> -> tải file về (đặt sẵn tên file)
+ *   POST /mcp/higgsfield  -> MCP server tạo ảnh / video bằng Higgsfield API
+ *   ANY  /mcp/atlassian   -> cầu nối tới Jira/Confluence MCP (đổi token sang Basic auth)
  *
  * Biến môi trường (tuỳ chọn, đặt trong Settings > Variables của Worker):
  *   ALLOWED_ORIGINS = https://dinhtanphuc.github.io
  *     -> chỉ website của bạn được gọi /resolve. Bỏ trống = cho phép mọi nơi.
+ *   HF_KEY        = <Higgsfield API key ID>:<Higgsfield API key secret>   (Secret)
+ *   HF_MCP_TOKEN  = chuỗi bí mật tự đặt, website dùng để gọi /mcp/higgsfield (Secret)
  */
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -35,9 +39,13 @@ export default {
     });
 
     if (request.method === 'OPTIONS') return new Response(null, { headers: cors });
-    if (request.method !== 'GET') return json({ ok: false, code: 'METHOD' }, 405);
 
     const url = new URL(request.url);
+    // Các route MCP được Claude API gọi từ máy chủ Anthropic (không qua trình duyệt)
+    if (url.pathname === '/mcp/higgsfield') return higgsfieldMcp(request, env);
+    if (url.pathname === '/mcp/atlassian') return atlassianProxy(request);
+
+    if (request.method !== 'GET') return json({ ok: false, code: 'METHOD' }, 405);
     try {
       if (url.pathname === '/resolve') {
         if (!anyOrigin && origin && !allowed.includes(origin)) return json({ ok: false, code: 'FORBIDDEN' }, 403);
@@ -171,4 +179,231 @@ function decodeEntities(s) {
 }
 function safeName(n) {
   return n.replace(/[\\/:*?"<>|\r\n]+/g, '_').slice(0, 120) || 'video.mp4';
+}
+
+/* =====================================================================
+ * Cầu nối Jira / Confluence (Atlassian Rovo MCP)
+ * Claude API chỉ gửi được "Authorization: Bearer <token>".
+ *   token = "basic:<base64(email:api_token)>"  -> chuyển thành Basic auth
+ *   token khác (API key service account)       -> giữ nguyên Bearer
+ * ===================================================================== */
+const ATLASSIAN_MCP = 'https://mcp.atlassian.com/v1/mcp';
+
+async function atlassianProxy(request) {
+  const headers = new Headers();
+  for (const [k, v] of request.headers) {
+    const key = k.toLowerCase();
+    if (['host', 'content-length', 'cf-connecting-ip', 'x-forwarded-for', 'x-real-ip'].includes(key) || key.startsWith('cf-')) continue;
+    headers.set(k, v);
+  }
+  const auth = request.headers.get('Authorization') || '';
+  const m = auth.match(/^Bearer\s+(.+)$/i);
+  if (m) {
+    const token = m[1].trim();
+    headers.set('Authorization', token.startsWith('basic:') ? 'Basic ' + token.slice(6) : 'Bearer ' + token);
+  }
+  const init = { method: request.method, headers, redirect: 'follow' };
+  if (!['GET', 'HEAD'].includes(request.method)) init.body = request.body;
+  const up = await fetch(ATLASSIAN_MCP, init);
+  const out = new Headers(up.headers);
+  out.delete('content-encoding');
+  out.delete('content-length');
+  return new Response(up.body, { status: up.status, headers: out });
+}
+
+/* =====================================================================
+ * MCP server Higgsfield (tối giản, không lưu phiên)
+ * ===================================================================== */
+const HF_API = 'https://api.higgsfield.ai';
+const CAMERA_MOVES = ['static-shot', 'dolly-in', 'dolly-out', 'tracking', 'side-tracking', 'handheld', 'crane-up', 'crane-down', 'pan-left', 'pan-right', 'tilt-up', 'tilt-down', 'slow-zoom-in', 'slow-zoom-out', 'drone-orbit', 'arc-left', 'arc-right', 'whip-pan', 'dolly-zoom', 'aerial-pullback', 'rack-focus', 'pov', 'bullet-time', 'helicopter-shot', 'truck-left', 'truck-right', 'slider-left', 'slider-right', 'crush-zoom', 'robot-arm', 'snorricam', 'pedestal-up', 'pedestal-down'];
+const GENRES = ['epic', 'drama', 'noir', 'comedy', 'horror', 'action'];
+
+const HF_TOOLS = [
+  {
+    name: 'generate_image',
+    description: 'Generate an image with Higgsfield. Waits up to ~60s and returns image URLs. model "grok" (default, supports aspect_ratio, 2k and up to 10 reference images for editing) or "soul" (Higgsfield Soul v2, photorealistic, prompt only).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'Detailed English prompt.' },
+        model: { type: 'string', enum: ['grok', 'soul'], default: 'grok' },
+        aspect_ratio: { type: 'string', enum: ['auto', '1:1', '1:2', '2:1', '3:2', '2:3', '4:3', '3:4', '16:9', '9:16'], default: 'auto' },
+        resolution: { type: 'string', enum: ['1k', '2k'], default: '1k' },
+        image_urls: { type: 'array', items: { type: 'string' }, maxItems: 10, description: 'Optional public reference image URLs (grok only).' }
+      },
+      required: ['prompt']
+    }
+  },
+  {
+    name: 'generate_video',
+    description: 'Generate a cinematic video with Higgsfield Cinema Studio 4.0 (text-to-video, or reference-to-video when image_urls given). Costs credits per second. Waits up to ~50s; if not finished, returns request_id to check later with check_generation.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prompt: { type: 'string', description: 'Detailed English shot description. Spoken lines may be in Vietnamese in quotes.' },
+        duration: { type: 'integer', minimum: 4, maximum: 30, default: 5 },
+        aspect_ratio: { type: 'string', enum: ['16:9', '4:3', '1:1', '3:4', '9:16', '21:9'], default: '9:16' },
+        resolution: { type: 'string', enum: ['480p', '720p'], default: '720p' },
+        generate_audio: { type: 'boolean', default: true },
+        camera_movement: { type: 'string', enum: CAMERA_MOVES },
+        genre: { type: 'string', enum: GENRES },
+        image_urls: { type: 'array', items: { type: 'string' }, maxItems: 30, description: 'Optional public reference image URLs.' }
+      },
+      required: ['prompt']
+    }
+  },
+  {
+    name: 'check_generation',
+    description: 'Check status of a Higgsfield request and return output URLs when completed.',
+    inputSchema: { type: 'object', properties: { request_id: { type: 'string' } }, required: ['request_id'] }
+  },
+  {
+    name: 'generate_custom',
+    description: 'Advanced: call any Higgsfield model endpoint by model_id (e.g. "higgsfield/ads-studio/v1.0") with its documented JSON params. Use only when the user names a specific model.',
+    inputSchema: {
+      type: 'object',
+      properties: { model_id: { type: 'string' }, params: { type: 'object' } },
+      required: ['model_id', 'params']
+    }
+  }
+];
+
+async function higgsfieldMcp(request, env) {
+  const rpcHeaders = { 'Content-Type': 'application/json' };
+  if (request.method === 'GET') return new Response('Method not allowed', { status: 405, headers: { Allow: 'POST' } });
+  if (request.method === 'DELETE') return new Response(null, { status: 200 });
+  if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
+
+  if (env.HF_MCP_TOKEN) {
+    const auth = request.headers.get('Authorization') || '';
+    if (auth !== 'Bearer ' + env.HF_MCP_TOKEN) return new Response(JSON.stringify({ error: 'unauthorized' }), { status: 401, headers: rpcHeaders });
+  }
+
+  let body;
+  try { body = await request.json(); } catch { return rpcError(null, -32700, 'Parse error'); }
+  const batch = Array.isArray(body) ? body : [body];
+  const results = [];
+  for (const msg of batch) {
+    if (!msg || msg.id === undefined || msg.id === null) continue; // notification
+    results.push(await handleRpc(msg, env));
+  }
+  if (!results.length) return new Response(null, { status: 202 });
+  return new Response(JSON.stringify(Array.isArray(body) ? results : results[0]), { headers: rpcHeaders });
+}
+
+function rpcError(id, code, message) {
+  return new Response(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }), { headers: { 'Content-Type': 'application/json' } });
+}
+
+async function handleRpc(msg, env) {
+  const reply = result => ({ jsonrpc: '2.0', id: msg.id, result });
+  switch (msg.method) {
+    case 'initialize':
+      return reply({
+        protocolVersion: (msg.params && msg.params.protocolVersion) || '2025-06-18',
+        capabilities: { tools: { listChanged: false } },
+        serverInfo: { name: 'phucboo-higgsfield', version: '1.0.0' }
+      });
+    case 'ping':
+      return reply({});
+    case 'tools/list':
+      return reply({ tools: HF_TOOLS });
+    case 'tools/call': {
+      const name = msg.params && msg.params.name;
+      const args = (msg.params && msg.params.arguments) || {};
+      try {
+        const data = await runHfTool(name, args, env);
+        return reply({ content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] });
+      } catch (e) {
+        return reply({ isError: true, content: [{ type: 'text', text: 'Error: ' + (e.message || e) }] });
+      }
+    }
+    default:
+      return { jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'Method not found: ' + msg.method } };
+  }
+}
+
+async function hf(path, init, env) {
+  if (!env.HF_KEY) throw new Error('Worker chưa có biến HF_KEY (Higgsfield key_id:key_secret).');
+  const res = await fetch(HF_API + path, {
+    ...init,
+    headers: { 'Authorization': 'Key ' + env.HF_KEY, 'Content-Type': 'application/json', ...(init && init.headers) }
+  });
+  const text = await res.text();
+  let data; try { data = JSON.parse(text); } catch { data = { raw: text }; }
+  if (!res.ok) {
+    const d = data && data.detail;
+    const msg = typeof d === 'string' ? d : (d && d.message) || JSON.stringify(data).slice(0, 400);
+    const hint = { 401: 'sai key', 403: 'hết số dư hoặc key bị khoá', 404: 'model không có cho tài khoản này', 422: 'tham số không hợp lệ', 429: 'hàng đợi đầy, thử lại sau' }[res.status] || '';
+    throw new Error(`Higgsfield ${res.status}${hint ? ' (' + hint + ')' : ''}: ${msg}`);
+  }
+  return data;
+}
+
+function summarize(d) {
+  const out = { request_id: d.request_id, status: d.status };
+  if (d.images) out.images = d.images.map(i => i.url);
+  if (d.video) out.video = d.video.url;
+  if (d.audio) out.audio = d.audio.url;
+  if (d.error) out.error = d.error;
+  if (d.errors && d.errors.length) out.errors = d.errors;
+  if (d.expires_at) out.expires_at = d.expires_at;
+  if (d.status === 'nsfw') out.note = 'Bị bộ lọc nội dung từ chối, không tính phí.';
+  if (d.status === 'queued' || d.status === 'in_progress') out.note = 'Chưa xong. Gọi check_generation với request_id này sau ít phút.';
+  return out;
+}
+
+async function submitAndWait(modelId, params, env, waitMs) {
+  const sub = await hf('/' + modelId, {
+    method: 'POST',
+    body: JSON.stringify(params),
+    headers: { 'Idempotency-Key': crypto.randomUUID() }
+  }, env);
+  const id = sub.request_id;
+  const deadline = Date.now() + waitMs;
+  let delay = 2000, last = sub;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, delay));
+    last = await hf(`/requests/${id}/status`, { method: 'GET' }, env);
+    if (['completed', 'failed', 'nsfw', 'canceled'].includes(last.status)) break;
+    delay = Math.min(delay * 1.5, 8000);
+  }
+  return summarize({ ...last, request_id: id });
+}
+
+function clean(obj) {
+  const o = {};
+  for (const [k, v] of Object.entries(obj)) if (v !== undefined && v !== null && !(Array.isArray(v) && !v.length)) o[k] = v;
+  return o;
+}
+
+async function runHfTool(name, a, env) {
+  if (name === 'generate_image') {
+    if (a.model === 'soul') return submitAndWait('higgsfield-ai/soul/v2/standard', { prompt: a.prompt }, env, 60000);
+    return submitAndWait('xai/grok-imagine-image-2.0', clean({
+      prompt: a.prompt, aspect_ratio: a.aspect_ratio || 'auto', resolution: a.resolution || '1k',
+      quality: 'medium', image_urls: a.image_urls
+    }), env, 60000);
+  }
+  if (name === 'generate_video') {
+    return submitAndWait('higgsfield/cinema-studio/4.0', clean({
+      prompt: a.prompt,
+      duration: Math.max(4, Math.min(30, parseInt(a.duration || 5, 10))),
+      aspect_ratio: a.aspect_ratio || '9:16',
+      resolution: a.resolution || '720p',
+      generate_audio: a.generate_audio !== false,
+      camera_movement: CAMERA_MOVES.includes(a.camera_movement) ? a.camera_movement : undefined,
+      genre: GENRES.includes(a.genre) ? a.genre : undefined,
+      image_urls: a.image_urls
+    }), env, 50000);
+  }
+  if (name === 'check_generation') {
+    const d = await hf(`/requests/${encodeURIComponent(a.request_id)}/status`, { method: 'GET' }, env);
+    return summarize({ ...d, request_id: a.request_id });
+  }
+  if (name === 'generate_custom') {
+    if (!/^[a-z0-9\-]+(\/[a-z0-9.\-]+)+$/i.test(a.model_id || '')) throw new Error('model_id không hợp lệ');
+    return submitAndWait(a.model_id, a.params || {}, env, 50000);
+  }
+  throw new Error('Unknown tool: ' + name);
 }
